@@ -12,6 +12,8 @@ def generate_data(rounds, probs, vals):
     data = [np.multiply(np.random.binomial(1, probs), vals) for _ in range(rounds)]
     return data
 
+
+
 ## Baseline MAB class
 class baseUCB():
     def __init__(self, number_of_rounds, narms, rewards):
@@ -239,3 +241,112 @@ class semiCUCB():
         reg = self.best_r(probs, vals) - self.reward(self.S[t], probs, vals)
         self.regrets[t] = np.abs(reg)
         self.update_est_semi(t, data[t-1])
+
+        
+        
+        
+        
+class DART():
+    def __init__(self, number_of_rounds, limit, N, K):
+        self.rounds = number_of_rounds  ## T
+        self.limit = limit
+        self.n = N  ## N
+        self.K = K  ## K
+        self.T = np.zeros((number_of_rounds, N))  ## number of visits
+        ## No UCB to calculate
+        self.p = np.zeros((number_of_rounds, N))  ## estimated parameters per item
+        self.p[0,:] = 0 ## init to 0
+        self.S = np.zeros((number_of_rounds, K), dtype=np.int32) # selected set
+        self.val = np.zeros(number_of_rounds)  # winner value
+        ## add three decision sets
+        self.A = set()
+        self.R = set()
+        self.N = set(range(self.n))
+        self.regrets = np.zeros(number_of_rounds)
+        
+    ## calculate reward
+    def reward(self, s, p, v):
+        s = np.sort(s)[::-1]
+        r = p[s[0]] * v[s[0]]
+        fac = 1
+        for k in range(1, len(s)):
+            fac = fac * (1 - p[s[k-1]])
+            r += fac * p[s[k]] * v[s[k]]
+        return r
+    
+    ## calculate best reward
+    def best_r(self, probs, vals):
+        best_r = self.reward([8,7,6], probs, vals)
+        return best_r
+    
+    def update_est(self, t, i):
+        self.T[t] = self.T[t-1]
+        self.p[t] = self.p[t-1]
+        for k in range(self.K- i):
+            self.T[t, self.S[t, k]] += 1
+            self.p[t, self.S[t, k]] = (1-1/self.T[t, self.S[t, k]])*self.p[t-1, self.S[t, k]] + self.val[t]/self.T[t, self.S[t, k]]
+            
+    ## DART
+    def classify_sets(self, t, p, delta):
+        temp = np.sort(p[t,])[::-1]
+        a_new = np.argwhere(p[t,] > temp[self.K] + delta).ravel()
+        r_new = np.argwhere(p[t,] < temp[self.K] - delta).ravel()
+        a = set(a_new).intersection(self.N)
+        r = set(r_new).intersection(self.N)
+        ## update classifications
+        self.A = self.A.union(a)
+        self.R = self.R.union(r)
+        self.N = self.N.difference(a.union(r))    
+
+    def dart_round(self, data, probs, vals):
+        delta = 1
+        lamb = np.sqrt(720*self.n*self.K*np.log(2*self.n*self.rounds)/self.rounds) 
+        t = 0
+        e = 0
+        n = 288*np.log(self.n*self.rounds)/delta**2
+  
+        while t<min(self.limit, self.rounds):
+            l = np.random.permutation(list(self.N))
+            Ke = self.K - len(self.A)
+            q = np.array_split(l, Ke)
+            e += 1
+            epoch_q = len(q)
+            for l in range(epoch_q):
+                if t < self.rounds:
+                    self.S[t] = list(self.A.union(q[l]))
+                    if l==epoch_q-1:
+                        i = 0
+                        while len(self.S[t]) != self.K:
+                            self.S[t].append(S[t-1][i])
+                            i += 1
+                    # arm reward
+                    curr_data = data[t-1]
+                    self.val[t] = np.max(curr_data[list(self.S[t])])
+                    reg = self.best_r(probs, vals) - self.reward(self.S[t], probs, vals)
+                    self.regrets[t] = np.abs(reg)
+                    if l==epoch_q-1:
+                        self.update_est(t, i)
+                    else:
+                        self.update_est(t, self.K)
+                    t += 1
+            self.classify_sets(t-1, self.p,delta)
+            if e >= n:
+                delta = delta/2
+                n = 288*np.log(self.n*self.rounds)/delta**2
+            if delta<lamb or len(self.A.union(self.N))==self.K:
+                print(t)
+                break
+        
+        if t<min(self.limit,self.rounds):
+            temp = np.sort(self.p[t-1,])[::-1]
+            a_new = np.argwhere(self.p[t-1,] > temp[self.K]).ravel()
+            a = set(a_new).intersection(self.N)
+            arm = list(a)
+            print(arm)
+            while t <self.rounds:
+                self.S[t] = arm
+                curr_data = data[t-1]
+                self.val[t] = np.max(curr_data[list(self.S[t])])
+                reg = self.best_r(probs, vals) - self.reward(self.S[t], probs, vals)
+                self.regrets[t] = np.abs(reg)
+                t += 1
